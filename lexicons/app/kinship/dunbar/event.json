@@ -1,0 +1,12 @@
+{
+  "lexicon": 1,
+  "id": "app.kinship.dunbar.event",
+  "description": "Append-only, sealed Dunbar event. Plaintext shape: packages/dunbar/src/model.ts (DunbarEvent).",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": { "type": "object", "required": ["sealed"], "properties": { "sealed": { "type": "ref", "ref": "app.kinship.vault.sealed" } } }
+    }
+  }
+}

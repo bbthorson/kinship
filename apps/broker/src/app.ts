@@ -1,0 +1,118 @@
+import { CreateInviteSchema, DidSchema, type Invite } from '@kinship/core';
+import { type Context, Hono } from 'hono';
+import { z } from 'zod';
+import type { BrokerStore } from './store';
+import { hashToken, newToken } from './tokens';
+
+/**
+ * Resolves the caller's DID from the request, or null. In production this is
+ * atproto inter-service auth (a JWT signed by the caller's PDS key, `aud` =
+ * the broker's DID) — not built yet; see docs/open-questions.md.
+ */
+export type CallerVerifier = (req: Request) => Promise<string | null>;
+
+/** Notifies the issuer (push with a 1-tap Revoke / Approve). Not built yet. */
+export type IssuerNotifier = (issuerDid: string, event: { kind: 'redeemed' | 'pending'; requesterDid: string; bundleId: string }) => Promise<void>;
+
+export interface AppDeps {
+  store: BrokerStore;
+  verifyCaller: CallerVerifier;
+  notify?: IssuerNotifier;
+  publicBaseUrl: string;
+  now?: () => number;
+}
+
+type Vars = { Variables: { did: string } };
+
+const ok = <T>(c: Context, data: T, status: 200 | 201 | 202 = 200) => c.json({ success: true as const, data }, status);
+const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 501, message: string, code?: string) =>
+  c.json({ success: false as const, error: { message, ...(code ? { code } : {}) } }, status);
+
+export function createApp(deps: AppDeps) {
+  const now = deps.now ?? Date.now;
+  const notify = deps.notify ?? (async () => {});
+  const app = new Hono<Vars>();
+
+  const requireDid = async (c: Context<Vars>, next: () => Promise<void>) => {
+    const did = await deps.verifyCaller(c.req.raw);
+    if (!did || !DidSchema.safeParse(did).success) return fail(c, 401, 'authentication required', 'UNAUTHENTICATED');
+    c.set('did', did);
+    await next();
+  };
+
+  app.get('/health', (c) => ok(c, { ok: true }));
+
+  // Issuer creates a capped invite. Returns the only copy of the bearer token.
+  app.post('/api/v1/invites', requireDid, async (c) => {
+    const parsed = CreateInviteSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return fail(c, 400, parsed.error.message, 'INVALID_INPUT');
+    const { ttlSeconds, ...rest } = parsed.data;
+    const token = newToken();
+    const invite: Invite = { ...rest, issuerDid: c.get('did'), expiresAt: now() + ttlSeconds * 1000, uses: 0 };
+    await deps.store.putInvite(await hashToken(token), invite);
+    return ok(c, { token, url: `${deps.publicBaseUrl}/i/${token}`, expiresAt: invite.expiresAt }, 201);
+  });
+
+  // Public, unauthenticated preview: who issued it and whether it's still live.
+  // Deliberately reveals no space refs. The browser fallback page (public card,
+  // optional .vcf) renders from this — see docs/open-questions.md § vcf.
+  app.get('/i/:token', async (c) => {
+    const inv = await deps.store.getInvite(await hashToken(c.req.param('token') ?? ''));
+    if (!inv) return fail(c, 404, 'invite not found', 'NOT_FOUND');
+    const live = inv.expiresAt > now() && inv.uses < inv.maxUses;
+    return ok(c, { issuerDid: inv.issuerDid, live, allowVcfFallback: inv.allowVcfFallback });
+  });
+
+  // Recipient (signed in on Kinship) redeems.
+  app.post('/i/:token/redeem', requireDid, async (c) => {
+    const tokenHash = await hashToken(c.req.param('token') ?? '');
+    const requesterDid = c.get('did');
+    const peek = await deps.store.getInvite(tokenHash);
+    if (!peek) return fail(c, 404, 'invite not found', 'NOT_FOUND');
+    if (peek.issuerDid === requesterDid) return fail(c, 409, 'cannot redeem your own invite', 'SELF_REDEEM');
+    const inv = await deps.store.consumeInvite(tokenHash, now());
+    if (!inv) return fail(c, 410, 'invite expired or used up', 'INVITE_SPENT');
+
+    if (inv.approvalMode === 'auto') {
+      await deps.store.allow(inv.issuerDid, inv.spaceRefs, requesterDid, now());
+      await notify(inv.issuerDid, { kind: 'redeemed', requesterDid, bundleId: inv.bundleId });
+      return ok(c, { status: 'granted' as const, issuerDid: inv.issuerDid, spaceRefs: inv.spaceRefs });
+    }
+    const id = crypto.randomUUID();
+    await deps.store.putPending({
+      id, issuerDid: inv.issuerDid, requesterDid, bundleId: inv.bundleId, spaceRefs: inv.spaceRefs, createdAt: now(), status: 'pending',
+    });
+    await notify(inv.issuerDid, { kind: 'pending', requesterDid, bundleId: inv.bundleId });
+    return ok(c, { status: 'pending' as const, requestId: id }, 202);
+  });
+
+  app.get('/api/v1/requests', requireDid, async (c) => ok(c, { items: await deps.store.listPending(c.get('did')), nextCursor: null }));
+
+  app.post('/api/v1/requests/:id/:decision{approve|deny}', requireDid, async (c) => {
+    const req = await deps.store.getPending(c.req.param('id') ?? '');
+    if (!req || req.issuerDid !== c.get('did')) return fail(c, 404, 'request not found', 'NOT_FOUND');
+    if (req.status !== 'pending') return fail(c, 409, `request already ${req.status}`, 'ALREADY_DECIDED');
+    const approve = c.req.param('decision') === 'approve';
+    if (approve) await deps.store.allow(req.issuerDid, req.spaceRefs, req.requesterDid, now());
+    await deps.store.setPendingStatus(req.id, approve ? 'approved' : 'denied');
+    return ok(c, { id: req.id, status: approve ? 'approved' : 'denied' });
+  });
+
+  // Issuer revokes spaces from a recipient. The device computes which spaces
+  // via the Grant Ledger (reference counting) and sends only those.
+  app.post('/api/v1/revocations', requireDid, async (c) => {
+    const body = z
+      .object({ did: DidSchema, spaceRefs: z.array(z.string().min(1)).min(1).max(32) })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return fail(c, 400, body.error.message, 'INVALID_INPUT');
+    await deps.store.disallow(c.get('did'), body.data.spaceRefs, body.data.did);
+    return ok(c, { revoked: body.data.spaceRefs });
+  });
+
+  // The access check the issuer's PDS calls (managed-space policy, broker as
+  // managingApp). The XRPC name and shape are unconfirmed until the beta docs
+  // land, so this is not wired — docs/open-questions.md § access check.
+  app.all('/xrpc/*', (c) => fail(c, 501, 'access-check contract not yet confirmed', 'NOT_IMPLEMENTED'));
+
+  return app;
+}

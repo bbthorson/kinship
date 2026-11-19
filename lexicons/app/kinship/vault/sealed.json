@@ -1,0 +1,17 @@
+{
+  "lexicon": 1,
+  "id": "app.kinship.vault.sealed",
+  "description": "Envelope for every vault record (contact, bundle, grant) and every dunbar event. The PDS sees only ciphertext; the inner type is inside the plaintext.",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": ["alg", "keyId", "nonce", "ciphertext"],
+      "properties": {
+        "alg": { "type": "string", "knownValues": ["xchacha20poly1305"] },
+        "keyId": { "type": "string", "maxLength": 64, "description": "Which vault key generation sealed this; lets keys rotate." },
+        "nonce": { "type": "bytes", "minLength": 24, "maxLength": 24 },
+        "ciphertext": { "type": "bytes", "maxLength": 65536 }
+      }
+    }
+  }
+}

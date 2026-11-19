@@ -1,0 +1,13 @@
+{
+  // Kinship Edge Broker. Holds allowlists and hashed invite tokens only —
+  // never a phone number, address or note (PRD § 4).
+  "name": "kinship-broker",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    // database_id is filled in once `wrangler d1 create kinship-broker` has run.
+    { "binding": "DB", "database_name": "kinship-broker", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+  ],
+  "vars": { "PUBLIC_BASE_URL": "https://kinship.app" }
+}

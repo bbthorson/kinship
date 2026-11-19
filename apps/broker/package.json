@@ -1,0 +1,20 @@
+{
+  "name": "@kinship/broker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p .",
+    "db:migrate:local": "wrangler d1 migrations apply kinship-broker --local"
+  },
+  "dependencies": {
+    "@kinship/core": "*",
+    "hono": "^4.13.16",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251101.0",
+    "wrangler": "4.149.0"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "app.kinship.card.channel",
+  "description": "One atomic contact channel. Exactly one per channel space (app.kinship.space.channel), so each fact has a single source of truth. The human label lives here, never in the space key.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "label": { "type": "string", "maxGraphemes": 64, "maxLength": 640 },
+          "value": { "type": "union", "refs": ["#phone", "#email", "#address", "#birthday", "#messaging"] },
+          "updatedAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "phone": { "type": "object", "required": ["e164"], "properties": { "e164": { "type": "string", "maxLength": 16 }, "kind": { "type": "string", "knownValues": ["mobile", "home", "work", "other"] } } },
+    "email": { "type": "object", "required": ["address"], "properties": { "address": { "type": "string", "maxLength": 320 } } },
+    "address": {
+      "type": "object",
+      "properties": {
+        "street": { "type": "string", "maxLength": 512 },
+        "locality": { "type": "string", "maxLength": 128 },
+        "region": { "type": "string", "maxLength": 128 },
+        "postalCode": { "type": "string", "maxLength": 32 },
+        "country": { "type": "string", "description": "ISO 3166-1 alpha-2", "maxLength": 2 }
+      }
+    },
+    "birthday": { "type": "object", "required": ["month", "day"], "properties": { "year": { "type": "integer" }, "month": { "type": "integer", "minimum": 1, "maximum": 12 }, "day": { "type": "integer", "minimum": 1, "maximum": 31 } } },
+    "messaging": { "type": "object", "required": ["service", "handle"], "properties": { "service": { "type": "string", "knownValues": ["signal", "whatsapp", "telegram", "imessage", "bluesky"] }, "handle": { "type": "string", "maxLength": 256 } } }
+  }
+}

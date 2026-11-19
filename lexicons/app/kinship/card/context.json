@@ -1,0 +1,24 @@
+{
+  "lexicon": 1,
+  "id": "app.kinship.card.context",
+  "description": "A context facet (Work, Rugby, Sci-Fi). One per context space (app.kinship.space.context). Carries the scalar fields the client's collision rule resolves.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "maxGraphemes": 64, "maxLength": 640 },
+          "nickname": { "type": "string", "maxGraphemes": 64, "maxLength": 640 },
+          "role": { "type": "string", "maxGraphemes": 128, "maxLength": 1280 },
+          "organization": { "type": "string", "maxGraphemes": 128, "maxLength": 1280 },
+          "avatarOverride": { "type": "blob", "accept": ["image/png", "image/jpeg", "image/webp"], "maxSize": 1000000 },
+          "links": { "type": "array", "maxLength": 12, "items": { "type": "ref", "ref": "app.kinship.card.profile#link" } },
+          "updatedAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}
