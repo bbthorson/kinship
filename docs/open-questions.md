@@ -1,87 +1,57 @@
 # Open questions
 
-What the PRD leaves open or gets wrong against what is known on 2026-11-19. The Spaces
-facts come from Vox Pop's `specs/organizations.md` § 5 (checked 2026-11-14) and must be
-re-checked once the 2026-12-01 beta docs are out.
+Status as of 2026-11-19. Spaces facts come from Vox Pop's `specs/organizations.md` § 5
+(checked 2026-11-14) and the [space sync](https://atproto.com/blog/space-sync) post. Re-check
+after the 2026-12-01 beta docs are out.
 
-## 1. Overlap with Vox Pop's mobile app (decide first)
+## Settled
 
-Vox Pop's `apps/mobile` is already an Expo + op-sqlite "phone + contacts replacement": device
-contacts imported via `expo-contacts`, a CRM with notes, tags, lifecycle, score and cadence, an
-outbox sync engine, and a screening allowlist. That is most of PRD components 2 and 4 under another
-name. Options:
+| # | Question | Answer |
+|---|---|---|
+| 1 | Kinship vs. Vox Pop's mobile contacts | Kinship **replaces** Vox Pop's contact management. See `apps/mobile/README.md` |
+| 2 | Which Spaces model to build against | The 2026-12-01 beta. Live-sync users are on a Bluesky PDS that supports it. Policy choice: decision 0003 |
+| 3 | `.vcf` fallback vs. zero PII | A sealed vCard: the issuer's phone encrypts it, the key travels in the URL fragment, the broker serves the ciphertext once. Built (`packages/core/src/sealed-vcf.ts`, `POST /i/:token/vcf`) |
+| 4 | Is there a Jetstream for spaces? | Yes, through a sync service using delegated read access. Design: decision 0002 |
+| 5 | Decay and impulse formulas | Replaceable algorithms, like Bluesky feeds. Built. Decision 0001 |
 
-- **Kinship = packages, Vox Pop = an app that uses them.** Lexicons, `dunbar`, `core` and the broker
-  live here; Vox Pop's mobile app adopts them. Least duplicated work. The PRD's own mobile client
-  becomes a later, thin app or nothing.
-- **Kinship = its own app.** Two Expo apps maintaining two op-sqlite contact stores and two
-  OS-contacts bridges. Only worth it if Kinship must ship without Vox Pop's branding or audience.
+## Deferred, by choice
 
-Vox Pop's CRM keeps its enrichment on the BFF (Postgres). Kinship's premise is that it's
-E2EE in the user's vault. Adopting Kinship means moving those notes off the server.
+- **Opting out of Kinship's lexicons and spaces.** Someone using Vox Pop who doesn't want their
+  contacts in `app.kinship.*` spaces. Not now. Keeping the Dunbar engine and the OS-contacts bridge
+  free of any Spaces imports keeps this open: a "local-only" mode would use both without publishing.
+- **Remote scoring algorithms.** Decision 0001, last section.
 
-## 2. The access check is a policy, not a callback
+## Open
 
-The PRD's "PDS `checkUserAccess` delegated to the broker" corresponds to the beta's
-**managed space**: `com.atproto.managedspace.policy` with `managingApp` set to a `did#serviceId`
-(never a bare DID). The alternative is a **member space** (`com.atproto.memberspace.policy`) whose
-members the client sets with `putMembers` / `removeMembers` (100 per call). That's the PRD's
-fallback and works with the phone offline once the members are written.
+### Naming
+Undecided, and this may become a Vox Pop feature rather than its own brand. `app.kinship.*` and
+"Kinship" are **working names**. Lexicon ids are permanent once published, so the namespace must be
+decided before Phase 1 publishes anything. If this becomes part of Vox Pop, the natural namespace
+is `audio.voxpop.contact.*` under the domain Vox Pop already holds. Until then, code refers to
+NSIDs only through `packages/core/src/nsid.ts`, so a rename touches that file and the lexicon JSON.
 
-To verify after 2026-12-01:
-- the XRPC a host calls on a managing app and its request/response (the broker's `/xrpc/*` is a 501 until then);
-- whether Bluesky's PDS fleet supports managed spaces at all on day one. Some hosts implement only
-  flat RBAC (opensocial.fyi had no managed-space policy on 2026-11-14);
-- whether a member-space-only v1 is good enough: it needs the issuer's device (or the broker with
-  a delegated session) to call `putMembers` on approval, which is fine for `manual` bundles and
-  adds latency for `auto` ones.
+### Beta specifics to verify after 2026-12-01
+- The OAuth scope that lets the broker call `putMembers` for auto bundles, and nothing more (decision 0003).
+- Whether the 100-member limit is per call or per space.
+- Sync-service method names, credential lifetime, cursor format (decision 0002). Where it runs
+  (Durable Object vs. container) depends on the SDK.
+- Space URI format: expected to move from `at://<authority>/space/…` to `at:space/<authority>/…`.
+  Store `{ authority, type, skey }`, not URI strings.
 
-## 3. Space URI format
+### Space count
+One space per channel plus one per context means a two-bundle grant is perhaps 4–6 spaces per
+contact. Across 150 contacts, that's a lot of credentials for the sync service to hold and refresh.
+Check per-authority space limits and refresh cost against the 1.5 s QR-to-live target.
 
-Expected to change from `at://<authority>/space/…` to `at:space/<authority>/<type>/<skey>/…`
-(about 75% likely as of 2026-11-14). Store `{ authority, type, skey }`, not URI strings, and build
-URIs in one module.
+### Broker caller auth
+atproto inter-service auth JWTs (`aud` = the broker's DID). Not built: `verifyCaller` is a stub,
+and the deployed worker rejects everything unless `DEV_AUTH=true`. The broker needs its own
+`did:web`.
 
-## 4. "Spaces Jetstream"
+### Vault key recovery
+A recovery phrase as the floor. Passkey PRF wrapping needs PRF support from both platforms' passkey
+providers.
 
-Unverified that any firehose carries permissioned space records: they are not public, so a relay
-can't fan them out to readers without credentials. Plan for per-space pulls with credentials,
-triggered by a silent push from the broker (which knows who is allowed on what, not what changed).
-This bears on Journey B and the iOS background-sync risk.
-
-## 5. The .vcf fallback contradicts "zero PII"
-
-The broker serves a one-time `.vcf` to non-Kinship recipients but stores no phone numbers. The
-public base card has no channels, so a vCard built from it holds a name and links only. To include
-a number, either the issuer's phone encrypts a vCard into the invite at creation (key in the URL
-fragment, never sent to the broker), or the fallback is name + links only. The first keeps the
-promise and is recommended.
-
-## 6. Credential lifetime
-
-The PRD says space credentials last 10–60 min. Delegation tokens in the beta are single-use and
-live 60 s. Confirm which credential the reader holds and how it refreshes. It sets how often a
-recipient's device talks to the issuer's PDS.
-
-## 7. Space count
-
-One space per channel per user, plus one per context, means a recipient of a two-bundle grant
-holds credentials for perhaps 4–6 spaces per contact, times 150 contacts. Check per-host limits on
-spaces per authority and the cost of a credential refresh at that fan-out, against the PRD's 1.5 s
-QR-to-live target.
-
-## 8. NSID domain
-
-`app.kinship.*` requires control of `kinship.app` DNS. Confirm it's held, or rename now.
-
-## 9. Broker caller auth
-
-Callers authenticate with atproto inter-service auth JWTs (`aud` = the broker's DID, signed by
-the caller's PDS signing key). Not built: `verifyCaller` is a stub, and the deployed worker
-rejects everything unless `DEV_AUTH=true`. The broker also needs its own `did:web` for `aud` and
-for `managingApp`.
-
-## 10. Vault key recovery
-
-Unchanged from the PRD. Note that a passkey PRF wrap needs PRF support on both platforms'
-passkey providers. A recovery phrase is the floor regardless.
+### Sealed vCard on React Native
+`sealVcf` uses WebCrypto, which Hermes lacks. It needs `react-native-quick-crypto`, which Vox
+Pop's mobile app would take on as a dependency.

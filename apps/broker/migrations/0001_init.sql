@@ -14,7 +14,8 @@ CREATE TABLE invites (
 );
 CREATE INDEX invites_issuer ON invites (issuer_did);
 
--- Who may read which of an issuer's spaces. This is what the access check answers from.
+-- Who may read which of an issuer's spaces: a mirror of the PDS member lists
+-- (decision 0003), used for redemption and as the sync service's index.
 CREATE TABLE allowlist (
   issuer_did   TEXT NOT NULL,
   space_ref    TEXT NOT NULL,

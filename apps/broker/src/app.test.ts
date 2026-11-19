@@ -15,10 +15,10 @@ function setup(t = 1_000_000) {
     verifyCaller: async (r) => r.headers.get('x-did'),
     now: () => clock.t,
   });
-  const call = (path: string, did: string | null, body?: unknown) =>
+  const call = (path: string, did: string | null, body?: unknown, headers: Record<string, string> = {}) =>
     app.request(path, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { 'content-type': 'application/json', ...(did ? { 'x-did': did } : {}) },
+      headers: { 'content-type': 'application/json', ...(did ? { 'x-did': did } : {}), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   const invite = async (over: Record<string, unknown> = {}) => {
@@ -77,5 +77,42 @@ describe('broker', () => {
     const { call, invite } = setup();
     const body = JSON.stringify(await (await call(`/i/${await invite()}`, null)).json());
     expect(body).not.toContain('ctx-rugby');
+  });
+});
+
+describe('sealed vcf fallback', () => {
+  const sealed = { iv: 'AAAAAAAAAAAAAAAA', ciphertext: 'c2VjcmV0' };
+
+  it('refuses a sealed vCard unless the fallback is allowed', async () => {
+    const { call } = setup();
+    const res = await call('/api/v1/invites', ALICE, {
+      bundleId: 'b', spaceRefs: ['cell'], maxUses: 1, ttlSeconds: 3600, approvalMode: 'auto', sealedVcf: sealed,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('serves the ciphertext exactly once and spends the invite', async () => {
+    const { call, invite } = setup();
+    const token = await invite({ maxUses: 2, allowVcfFallback: true, sealedVcf: sealed });
+    const first = await call(`/i/${token}/vcf`, null, {});
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { data: unknown }).data).toEqual(sealed);
+    expect((await call(`/i/${token}/vcf`, null, {})).status).toBe(410);
+    // One of two uses went on the vCard; one app redemption is left.
+    expect((await call(`/i/${token}/redeem`, BOB, {})).status).toBe(200);
+    expect((await call(`/i/${token}/redeem`, CAROL, {})).status).toBe(410);
+  });
+
+  it('gives browsers a page with no space refs and a nonce-locked script', async () => {
+    const { call, invite } = setup();
+    const token = await invite({ allowVcfFallback: true, sealedVcf: sealed });
+    const res = await call(`/i/${token}`, null, undefined, { accept: 'text/html' });
+    expect(res.headers.get('content-type')).toContain('text/html');
+    const csp = res.headers.get('content-security-policy') ?? '';
+    const nonce = /'nonce-([a-f0-9]+)'/.exec(csp)?.[1];
+    const html = await res.text();
+    expect(nonce && html.includes(`nonce="${nonce}"`)).toBe(true);
+    expect(html).toContain('Save contact');
+    expect(html).not.toContain('ctx-rugby');
   });
 });

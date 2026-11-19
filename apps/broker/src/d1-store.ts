@@ -1,4 +1,4 @@
-import { type Invite, InviteSchema } from '@kinship/core';
+import { type Invite, InviteSchema, type SealedVcf, SealedVcfSchema } from '@kinship/core';
 import { z } from 'zod';
 import type { BrokerStore, PendingRequest } from './store';
 
@@ -125,5 +125,14 @@ export class D1Store implements BrokerStore {
 
   async setPendingStatus(id: string, status: 'approved' | 'denied') {
     await this.db.prepare('UPDATE pending_requests SET status = ? WHERE id = ?').bind(status, id).run();
+  }
+
+  async putSealedVcf(h: string, v: SealedVcf) {
+    await this.db.prepare('INSERT INTO sealed_vcfs (token_hash, iv, ciphertext) VALUES (?, ?, ?)').bind(h, v.iv, v.ciphertext).run();
+  }
+
+  async takeSealedVcf(h: string) {
+    const row = await this.db.prepare('DELETE FROM sealed_vcfs WHERE token_hash = ? RETURNING iv, ciphertext').bind(h).first();
+    return row ? SealedVcfSchema.parse(row) : null;
   }
 }

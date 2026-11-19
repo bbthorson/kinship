@@ -1,4 +1,4 @@
-import type { Invite } from '@kinship/core';
+import type { Invite, SealedVcf } from '@kinship/core';
 
 export interface PendingRequest {
   id: string;
@@ -26,12 +26,16 @@ export interface BrokerStore {
   getPending(id: string): Promise<PendingRequest | null>;
   listPending(issuerDid: string): Promise<PendingRequest[]>;
   setPendingStatus(id: string, status: 'approved' | 'denied'): Promise<void>;
+  putSealedVcf(tokenHash: string, vcf: SealedVcf): Promise<void>;
+  /** Return and delete in one step, so only one reader ever gets it. */
+  takeSealedVcf(tokenHash: string): Promise<SealedVcf | null>;
 }
 
 export class MemoryStore implements BrokerStore {
   private invites = new Map<string, Invite>();
   private allowed = new Set<string>();
   private pending = new Map<string, PendingRequest>();
+  private vcfs = new Map<string, SealedVcf>();
   private key = (i: string, s: string, d: string) => `${i}\u0000${s}\u0000${d}`;
 
   async putInvite(h: string, inv: Invite) { this.invites.set(h, { ...inv }); }
@@ -51,5 +55,11 @@ export class MemoryStore implements BrokerStore {
   async setPendingStatus(id: string, status: 'approved' | 'denied') {
     const p = this.pending.get(id);
     if (p) p.status = status;
+  }
+  async putSealedVcf(h: string, v: SealedVcf) { this.vcfs.set(h, { ...v }); }
+  async takeSealedVcf(h: string) {
+    const v = this.vcfs.get(h) ?? null;
+    this.vcfs.delete(h);
+    return v;
   }
 }

@@ -1,39 +1,34 @@
 /**
- * Dunbar rings, interaction weights and the event shape the daemon folds.
+ * The Dunbar event log and the structure every scoring algorithm shares.
  *
- * The event log is `app.kinship.dunbar.event` (key: tid) in the vault space.
- * Events are decrypted on device and handed to `fold()` in any order; the fold
- * sorts by tid itself, because tid order is the only order that is the same on
- * every device.
+ * Two things are kept apart on purpose:
+ * - **Relationship state** (which ring, evergreen, snoozed, pruned) is the
+ *   user's own decisions. It is folded the same way whatever algorithm runs,
+ *   so switching algorithms never moves anyone between rings.
+ * - **Scores** (how healthy a relationship looks) are an algorithm's opinion,
+ *   and the algorithm is replaceable (`algorithm.ts`).
+ *
+ * The log is `app.kinship.dunbar.event` (key: tid) in the vault space, sealed
+ * on device. Events are folded in tid order, the only order every device agrees on.
  */
 
 export const RINGS = ['support', 'sympathy', 'affinity', 'clan', 'dormant'] as const;
 export type Ring = (typeof RINGS)[number];
 
-export const RING_CONFIG: Record<Ring, { cap: number; halfLifeDays: number | null }> = {
-  support: { cap: 5, halfLifeDays: 7 },
-  sympathy: { cap: 15, halfLifeDays: 21 },
-  affinity: { cap: 50, halfLifeDays: 60 },
-  clan: { cap: 150, halfLifeDays: 180 },
-  // null half-life = decay frozen. Dormant contacts never enter the garden walk.
-  dormant: { cap: Number.POSITIVE_INFINITY, halfLifeDays: null },
+/** Hard slot caps (one-in, one-out). Structural, so not an algorithm parameter. */
+export const RING_CAPS: Record<Ring, number> = {
+  support: 5,
+  sympathy: 15,
+  affinity: 50,
+  clan: 150,
+  dormant: Number.POSITIVE_INFINITY,
 };
 
-export const INTERACTION_WEIGHTS = {
-  in_person: 45,
-  call_long: 30, // call over 10 minutes
-  dm_thread: 15,
-  atproto_reply: 8,
-  atproto_like: 2, // also reposts
-} as const;
-export type InteractionKind = keyof typeof INTERACTION_WEIGHTS;
+export const INTERACTION_KINDS = ['in_person', 'call_long', 'dm_thread', 'atproto_reply', 'atproto_like'] as const;
+/** `call_long` is a call over 10 minutes; `atproto_like` also covers reposts. */
+export type InteractionKind = (typeof INTERACTION_KINDS)[number];
 
-/** Light signals (likes/reposts) contribute at most this much weight per week. */
-export const LIGHT_SIGNAL_WEEKLY_CAP = 6;
-export const LIGHT_SIGNALS: ReadonlySet<InteractionKind> = new Set(['atproto_like']);
-
-export const DRIFT_THRESHOLD = 25;
-export const MULCH_DAYS = 30;
+export const DEFAULT_MULCH_DAYS = 30;
 export const DAY_MS = 86_400_000;
 export const WEEK_MS = 7 * DAY_MS;
 
@@ -51,19 +46,13 @@ export type DunbarEvent =
   | (EventBase & { type: 'snooze'; days?: number })
   | (EventBase & { type: 'prune' })
   | (EventBase & { type: 'evergreen_set'; evergreen: boolean })
+  /** The user's "how often should I see them" hint. Each algorithm reads it its own way. */
   | (EventBase & { type: 'half_life_set'; days: number | null });
 
-export interface ContactVitality {
-  contactId: string;
-  ring: Ring;
-  /** Vitality as of `asOf`, in [0, 100]. */
-  vitality: number;
-  /** The time `vitality` is valid at. */
-  asOf: number;
-  lastInteractionAt: number | null;
-  snoozedUntil: number | null;
-  evergreen: boolean;
-  customHalfLifeDays: number | null;
-  /** Light-signal weight spent per week bucket (floor(at / WEEK_MS)). */
-  lightSpent: Map<number, number>;
+export function byTid(a: DunbarEvent, b: DunbarEvent): number {
+  return a.tid < b.tid ? -1 : a.tid > b.tid ? 1 : 0;
+}
+
+export function sortedByTid(events: readonly DunbarEvent[]): DunbarEvent[] {
+  return events.slice().sort(byTid);
 }

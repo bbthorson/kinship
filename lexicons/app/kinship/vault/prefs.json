@@ -1,0 +1,12 @@
+{
+  "lexicon": 1,
+  "id": "app.kinship.vault.prefs",
+  "description": "Sealed user preferences (e.g. the chosen scoring algorithm and its params: packages/dunbar AlgorithmPreference). Plaintext shape is defined in packages/core, not here: nothing outside the device should ever parse it.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "literal:self",
+      "record": { "type": "object", "required": ["sealed"], "properties": { "sealed": { "type": "ref", "ref": "app.kinship.vault.sealed" } } }
+    }
+  }
+}

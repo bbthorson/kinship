@@ -8,8 +8,9 @@ version: 1.0
 Target protocol milestone: AT Protocol Spaces Public Beta (2026-12-01). Target end-user launch: Q1 2027.
 
 > Recorded as received on 2026-11-19. Where it conflicts with `docs/open-questions.md` or a
-> decision in `docs/decisions/`, those win. The decay and impulse equations were missing from the
-> draft; `docs/decisions/0001-dunbar-formulas.md` supplies them.
+> decision in `docs/decisions/`, those win. Since then: Kinship replaces Vox Pop's contact
+> management instead of shipping its own app; scoring is replaceable (decision 0001); live sync
+> goes through a space sync service (0002); channel and context spaces are member spaces (0003).
 
 ## 1. Executive summary & suite philosophy
 
@@ -109,7 +110,7 @@ human-readable slugs. Labels live inside the gated record.
 
 - **Event-sourced.** Folds `app.kinship.dunbar.event` in tid order, locally.
 - **Decay and impulse.** Vitality V ∈ [0, 100] decays exponentially between interactions; each
-  interaction applies a bounded weight. (Equations: decision 0001.)
+  interaction applies a bounded weight. (Equations, and how they became one replaceable algorithm among several: decision 0001.)
 - **Rings.** Support clique (cap 5, t½ 7 d), sympathy group (15, 21 d), affinity band (50, 60 d),
   active clan (150, 180 d), dormant (∞, frozen, excluded from pruning).
 - **Weights.** In person +45, call > 10 min +30, DM thread +15, ATProto reply/mention +8, like/repost +2 (capped +6/week).

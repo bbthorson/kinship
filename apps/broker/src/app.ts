@@ -2,6 +2,7 @@ import { CreateInviteSchema, DidSchema, type Invite } from '@kinship/core';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { BrokerStore } from './store';
+import { fallbackPage } from './fallback-page';
 import { hashToken, newToken } from './tokens';
 
 /**
@@ -46,21 +47,46 @@ export function createApp(deps: AppDeps) {
   app.post('/api/v1/invites', requireDid, async (c) => {
     const parsed = CreateInviteSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return fail(c, 400, parsed.error.message, 'INVALID_INPUT');
-    const { ttlSeconds, ...rest } = parsed.data;
+    const { ttlSeconds, sealedVcf, ...rest } = parsed.data;
     const token = newToken();
+    const tokenHash = await hashToken(token);
     const invite: Invite = { ...rest, issuerDid: c.get('did'), expiresAt: now() + ttlSeconds * 1000, uses: 0 };
-    await deps.store.putInvite(await hashToken(token), invite);
+    await deps.store.putInvite(tokenHash, invite);
+    if (sealedVcf) await deps.store.putSealedVcf(tokenHash, sealedVcf);
+    // The client appends `#k=<vcf key>` itself; the broker never sees the key.
     return ok(c, { token, url: `${deps.publicBaseUrl}/i/${token}`, expiresAt: invite.expiresAt }, 201);
   });
 
   // Public, unauthenticated preview: who issued it and whether it's still live.
-  // Deliberately reveals no space refs. The browser fallback page (public card,
-  // optional .vcf) renders from this — see docs/open-questions.md § vcf.
+  // Deliberately reveals no space refs. Browsers get the fallback page; the app
+  // asks for JSON.
   app.get('/i/:token', async (c) => {
     const inv = await deps.store.getInvite(await hashToken(c.req.param('token') ?? ''));
     if (!inv) return fail(c, 404, 'invite not found', 'NOT_FOUND');
     const live = inv.expiresAt > now() && inv.uses < inv.maxUses;
+    if (c.req.header('accept')?.includes('text/html')) {
+      const nonce = crypto.randomUUID().replace(/-/g, '');
+      c.header('content-security-policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'`);
+      c.header('referrer-policy', 'no-referrer');
+      c.header('cache-control', 'no-store');
+      return c.html(fallbackPage({ live, allowVcfFallback: inv.allowVcfFallback, nonce }));
+    }
     return ok(c, { issuerDid: inv.issuerDid, live, allowVcfFallback: inv.allowVcfFallback });
+  });
+
+  // One-time sealed vCard for a browser recipient. Counts as a redemption, so a
+  // 1-use code handed out as a .vcf can't then be redeemed in the app too.
+  // POST, not GET, so link previewers and prefetchers don't burn it.
+  app.post('/i/:token/vcf', async (c) => {
+    const tokenHash = await hashToken(c.req.param('token') ?? '');
+    const inv = await deps.store.getInvite(tokenHash);
+    if (!inv || !inv.allowVcfFallback) return fail(c, 404, 'no contact card for this invite', 'NOT_FOUND');
+    if (inv.expiresAt <= now() || inv.uses >= inv.maxUses) return fail(c, 410, 'invite expired or used up', 'INVITE_SPENT');
+    const vcf = await deps.store.takeSealedVcf(tokenHash);
+    if (!vcf) return fail(c, 410, 'contact card already collected', 'VCF_TAKEN');
+    if (!(await deps.store.consumeInvite(tokenHash, now()))) return fail(c, 410, 'invite expired or used up', 'INVITE_SPENT');
+    c.header('cache-control', 'no-store');
+    return ok(c, vcf);
   });
 
   // Recipient (signed in on Kinship) redeems.
@@ -99,7 +125,8 @@ export function createApp(deps: AppDeps) {
   });
 
   // Issuer revokes spaces from a recipient. The device computes which spaces
-  // via the Grant Ledger (reference counting) and sends only those.
+  // via the Grant Ledger (reference counting), calls removeMembers on its PDS,
+  // and tells the broker so its mirror of the member lists stays current.
   app.post('/api/v1/revocations', requireDid, async (c) => {
     const body = z
       .object({ did: DidSchema, spaceRefs: z.array(z.string().min(1)).min(1).max(32) })
@@ -109,9 +136,9 @@ export function createApp(deps: AppDeps) {
     return ok(c, { revoked: body.data.spaceRefs });
   });
 
-  // The access check the issuer's PDS calls (managed-space policy, broker as
-  // managingApp). The XRPC name and shape are unconfirmed until the beta docs
-  // land, so this is not wired — docs/open-questions.md § access check.
+  // Reserved for a managed-space access check. Decision 0003 chose member
+  // spaces, so the PDS holds membership and nothing calls this. It stays a 501
+  // in case that decision is revisited once the beta docs land.
   app.all('/xrpc/*', (c) => fail(c, 501, 'access-check contract not yet confirmed', 'NOT_IMPLEMENTED'));
 
   return app;
