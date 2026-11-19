@@ -20,3 +20,17 @@ export const NSID = {
   vaultSealed: `${NS}.vault.sealed`,
   dunbarEvent: `${NS}.dunbar.event`,
 } as const;
+
+/**
+ * Broker methods, used as the `lxm` claim of service-auth tokens: a token
+ * minted for one method is refused by every other. The broker's routes are
+ * REST, so these name the operation rather than an XRPC endpoint. An OAuth
+ * client needs `rpc:<method>?aud=<broker did>` scope to mint each one.
+ */
+export const BROKER_METHOD = {
+  createInvite: `${NS}.broker.createInvite`,
+  redeemInvite: `${NS}.broker.redeemInvite`,
+  listRequests: `${NS}.broker.listRequests`,
+  decideRequest: `${NS}.broker.decideRequest`,
+  revoke: `${NS}.broker.revoke`,
+} as const;

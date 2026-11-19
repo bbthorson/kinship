@@ -44,9 +44,15 @@ contact. Across 150 contacts, that's a lot of credentials for the sync service t
 Check per-authority space limits and refresh cost against the 1.5 s QR-to-live target.
 
 ### Broker caller auth
-atproto inter-service auth JWTs (`aud` = the broker's DID). Not built: `verifyCaller` is a stub,
-and the deployed worker rejects everything unless `DEV_AUTH=true`. The broker needs its own
-`did:web`.
+Built (`apps/broker/src/auth/`): service-auth JWTs, ES256K and ES256, checked against the
+caller's `#atproto` key from PLC or host-level `did:web`, bound to a method by `lxm`, single use by
+`jti`. The broker serves its own `/.well-known/did.json`. Still open:
+- Its DID (`did:web:kinship.app` in `wrangler.jsonc`) follows the naming decision.
+- Check after 2026-12-01 that the Bluesky PDS issues `getServiceAuth` tokens for a non-XRPC
+  `lxm` like `app.kinship.broker.createInvite` under an OAuth `rpc:` scope. If it insists on
+  methods a lexicon defines, publish procedure lexicons for the five broker methods.
+- Only `Multikey` verification methods are read. Legacy `EcdsaSecp256k1VerificationKey2019`
+  documents are refused, not half-supported.
 
 ### Vault key recovery
 A recovery phrase as the floor. Passkey PRF wrapping needs PRF support from both platforms' passkey

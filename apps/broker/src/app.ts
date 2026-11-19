@@ -1,4 +1,4 @@
-import { CreateInviteSchema, DidSchema, type Invite } from '@kinship/core';
+import { BROKER_METHOD, CreateInviteSchema, DidSchema, type Invite } from '@kinship/core';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { BrokerStore } from './store';
@@ -6,11 +6,10 @@ import { fallbackPage } from './fallback-page';
 import { hashToken, newToken } from './tokens';
 
 /**
- * Resolves the caller's DID from the request, or null. In production this is
- * atproto inter-service auth (a JWT signed by the caller's PDS key, `aud` =
- * the broker's DID) — not built yet; see docs/open-questions.md.
+ * Resolves the caller's DID for a request to broker method `lxm`, or null.
+ * In production: atproto service auth (`auth/service-auth.ts`).
  */
-export type CallerVerifier = (req: Request) => Promise<string | null>;
+export type CallerVerifier = (req: Request, lxm: string) => Promise<string | null>;
 
 /** Notifies the issuer (push with a 1-tap Revoke / Approve). Not built yet. */
 export type IssuerNotifier = (issuerDid: string, event: { kind: 'redeemed' | 'pending'; requesterDid: string; bundleId: string }) => Promise<void>;
@@ -20,8 +19,12 @@ export interface AppDeps {
   verifyCaller: CallerVerifier;
   notify?: IssuerNotifier;
   publicBaseUrl: string;
+  /** The broker's own did:web. When set, `/.well-known/did.json` serves its document. */
+  brokerDid?: string;
   now?: () => number;
 }
+
+export const BROKER_SERVICE_ID = 'kinship_broker';
 
 type Vars = { Variables: { did: string } };
 
@@ -34,8 +37,8 @@ export function createApp(deps: AppDeps) {
   const notify = deps.notify ?? (async () => {});
   const app = new Hono<Vars>();
 
-  const requireDid = async (c: Context<Vars>, next: () => Promise<void>) => {
-    const did = await deps.verifyCaller(c.req.raw);
+  const requireDid = (lxm: string) => async (c: Context<Vars>, next: () => Promise<void>) => {
+    const did = await deps.verifyCaller(c.req.raw, lxm);
     if (!did || !DidSchema.safeParse(did).success) return fail(c, 401, 'authentication required', 'UNAUTHENTICATED');
     c.set('did', did);
     await next();
@@ -43,8 +46,19 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (c) => ok(c, { ok: true }));
 
+  // The broker's DID document: what callers put in `aud`, and how they find it.
+  // No verification key: the broker signs nothing yet.
+  app.get('/.well-known/did.json', (c) => {
+    if (!deps.brokerDid) return fail(c, 404, 'no DID configured', 'NOT_FOUND');
+    return c.json({
+      '@context': ['https://www.w3.org/ns/did/v1'],
+      id: deps.brokerDid,
+      service: [{ id: `#${BROKER_SERVICE_ID}`, type: 'KinshipBroker', serviceEndpoint: deps.publicBaseUrl }],
+    });
+  });
+
   // Issuer creates a capped invite. Returns the only copy of the bearer token.
-  app.post('/api/v1/invites', requireDid, async (c) => {
+  app.post('/api/v1/invites', requireDid(BROKER_METHOD.createInvite), async (c) => {
     const parsed = CreateInviteSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return fail(c, 400, parsed.error.message, 'INVALID_INPUT');
     const { ttlSeconds, sealedVcf, ...rest } = parsed.data;
@@ -90,7 +104,7 @@ export function createApp(deps: AppDeps) {
   });
 
   // Recipient (signed in on Kinship) redeems.
-  app.post('/i/:token/redeem', requireDid, async (c) => {
+  app.post('/i/:token/redeem', requireDid(BROKER_METHOD.redeemInvite), async (c) => {
     const tokenHash = await hashToken(c.req.param('token') ?? '');
     const requesterDid = c.get('did');
     const peek = await deps.store.getInvite(tokenHash);
@@ -112,9 +126,9 @@ export function createApp(deps: AppDeps) {
     return ok(c, { status: 'pending' as const, requestId: id }, 202);
   });
 
-  app.get('/api/v1/requests', requireDid, async (c) => ok(c, { items: await deps.store.listPending(c.get('did')), nextCursor: null }));
+  app.get('/api/v1/requests', requireDid(BROKER_METHOD.listRequests), async (c) => ok(c, { items: await deps.store.listPending(c.get('did')), nextCursor: null }));
 
-  app.post('/api/v1/requests/:id/:decision{approve|deny}', requireDid, async (c) => {
+  app.post('/api/v1/requests/:id/:decision{approve|deny}', requireDid(BROKER_METHOD.decideRequest), async (c) => {
     const req = await deps.store.getPending(c.req.param('id') ?? '');
     if (!req || req.issuerDid !== c.get('did')) return fail(c, 404, 'request not found', 'NOT_FOUND');
     if (req.status !== 'pending') return fail(c, 409, `request already ${req.status}`, 'ALREADY_DECIDED');
@@ -127,7 +141,7 @@ export function createApp(deps: AppDeps) {
   // Issuer revokes spaces from a recipient. The device computes which spaces
   // via the Grant Ledger (reference counting), calls removeMembers on its PDS,
   // and tells the broker so its mirror of the member lists stays current.
-  app.post('/api/v1/revocations', requireDid, async (c) => {
+  app.post('/api/v1/revocations', requireDid(BROKER_METHOD.revoke), async (c) => {
     const body = z
       .object({ did: DidSchema, spaceRefs: z.array(z.string().min(1)).min(1).max(32) })
       .safeParse(await c.req.json().catch(() => null));
