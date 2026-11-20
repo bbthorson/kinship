@@ -1,0 +1,50 @@
+name: CI
+
+# One job, so there is exactly one check name ("ci") to require on main.
+# No `paths-ignore`: a required check that never runs never reports, and
+# GitHub then blocks the PR with nothing red to explain why.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # setup-node ignores `packageManager`, and Node 22 bundles npm 10, which
+      # cannot install this tree. Install the pinned npm explicitly.
+      - name: Use the pinned npm
+        run: |
+          set -euo pipefail
+          WANT="$(node -p "require('./package.json').packageManager" | sed 's/^npm@//; s/+.*//')"
+          if [ "$(npm --version)" != "$WANT" ]; then npm install -g "npm@$WANT"; fi
+          npm --version
+
+      # `npm ci` fails if package.json and the lockfile disagree: that is the check.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # Bundle the Worker the way a deploy would, without deploying.
+      - name: Bundle the broker
+        working-directory: apps/broker
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/broker"

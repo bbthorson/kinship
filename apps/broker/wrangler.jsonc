@@ -9,5 +9,12 @@
     // database_id is filled in once `wrangler d1 create kinship-broker` has run.
     { "binding": "DB", "database_name": "kinship-broker", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
   ],
-  "vars": { "PUBLIC_BASE_URL": "https://kinship.app" }
+  "vars": {
+    "PUBLIC_BASE_URL": "https://kinship.app",
+    // Working name, like the domain above (docs/open-questions.md § Naming).
+    // A did:web must match the host that serves /.well-known/did.json.
+    "BROKER_DID": "did:web:kinship.app"
+  },
+  // Sweeps expired service-auth token ids.
+  "triggers": { "crons": ["17 * * * *"] }
 }
